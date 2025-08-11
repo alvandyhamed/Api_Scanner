@@ -1,0 +1,15 @@
+version: "3.8"
+
+services:
+  sitechecker:
+    build: .
+    image: sitechecker:dev
+    ports:
+      - "8080:8080"
+    # مهم برای کروم؛ بدونش ممکنه کرش کنه
+    shm_size: "1g"
+    # init برای جمع‌کردن بچه‌پردازش‌ها (chrome)
+    init: true
+    environment:
+      - TZ=Europe/Berlin
+    restart: unless-stopped
