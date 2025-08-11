@@ -18,7 +18,7 @@ import (
 var Mongo *mongo.Client
 var DB *mongo.Database
 
-// models/mongo.go
+// InitMongo: اتصال به Mongo و انتخاب دیتابیس
 func InitMongo(ctx context.Context) error {
 	uri := os.Getenv("MONGO_URI")
 
@@ -27,8 +27,8 @@ func InitMongo(ctx context.Context) error {
 		candidates = []string{uri}
 	} else {
 		candidates = []string{
-			"mongodb://mongo:27017/sitechecker",     // برای داخل داکر
-			"mongodb://127.0.0.1:27018/sitechecker", // برای go run بیرون
+			"mongodb://mongo:27017/sitechecker",     // داخل docker compose
+			"mongodb://127.0.0.1:27018/sitechecker", // اجرای لوکال
 		}
 	}
 
@@ -40,10 +40,9 @@ func InitMongo(ctx context.Context) error {
 		)
 		if err == nil {
 			pingCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-			defer cancel()
 			if err = c.Ping(pingCtx, nil); err == nil {
 				Mongo = c
-				// استخراج نام دیتابیس
+
 				dbName := os.Getenv("MONGO_DB")
 				if dbName == "" {
 					pu, _ := url.Parse(u)
@@ -53,8 +52,10 @@ func InitMongo(ctx context.Context) error {
 					}
 				}
 				DB = c.Database(dbName)
+				log.Printf("[mongo] connected db=%s uri=%s", DB.Name(), u)
 				return nil
 			}
+			cancel()
 			_ = c.Disconnect(context.Background())
 		}
 		lastErr = err
@@ -68,26 +69,51 @@ func InitMongo(ctx context.Context) error {
 func SitesColl() *mongo.Collection     { return DB.Collection("sites") }
 func PagesColl() *mongo.Collection     { return DB.Collection("pages") }
 func EndpointsColl() *mongo.Collection { return DB.Collection("endpoints") }
+func SinksColl() *mongo.Collection     { return DB.Collection("sinks") }
 
+// EnsureIndexes: ساخت ایندکس‌ها (و حذف ایندکس قدیمی sinks اگر بود)
 func EnsureIndexes(ctx context.Context) error {
-	// sites: _id یکتا (site_id = hamed0x.ir)
+	// sites
 	_, _ = SitesColl().Indexes().CreateOne(ctx, mongo.IndexModel{
 		Keys:    bson.D{{Key: "_id", Value: 1}},
 		Options: options.Index().SetUnique(true),
 	})
 
-	// pages: url_norm یکتا + جستجوهای متداول
+	// pages
 	_, _ = PagesColl().Indexes().CreateMany(ctx, []mongo.IndexModel{
-		{Keys: bson.D{{Key: "url_norm", Value: 1}}, Options: options.Index().SetUnique(true)},
-		{Keys: bson.D{{Key: "site_id", Value: 1}, {Key: "host", Value: 1}, {Key: "path", Value: 1}}},
+		{Keys: bson.D{{Key: "url_norm", Value: 1}}, Options: options.Index().SetUnique(true).SetName("uniq_url_norm")},
+		{Keys: bson.D{{Key: "site_id", Value: 1}, {Key: "host", Value: 1}, {Key: "path", Value: 1}}, Options: options.Index().SetName("q_site_host_path")},
 	})
 
-	// endpoints: (site_id, endpoint) یکتا
+	// endpoints
 	_, _ = EndpointsColl().Indexes().CreateOne(ctx, mongo.IndexModel{
 		Keys:    bson.D{{Key: "site_id", Value: 1}, {Key: "endpoint", Value: 1}},
-		Options: options.Index().SetUnique(true),
+		Options: options.Index().SetUnique(true).SetName("uniq_site_endpoint"),
 	})
 
-	log.Printf("[mongo] connected db=%s uri=%s", DB.Name(), os.Getenv("MONGO_URI"))
+	// sinks — حذف ایندکس قدیمی اگر وجود داشت
+	// (اسم پیش‌فرض: site_id_1_page_url_1_source_url_1_kind_1_line_1_col_1)
+	_, _ = SinksColl().Indexes().DropOne(ctx, "site_id_1_page_url_1_source_url_1_kind_1_line_1_col_1")
+
+	iv := SinksColl().Indexes()
+
+	// 1) ایندکس یکتای sig (کلید ددوپ)
+	_, _ = iv.CreateOne(ctx, mongo.IndexModel{
+		Keys:    bson.D{{Key: "sig", Value: 1}},
+		Options: options.Index().SetUnique(true).SetName("uniq_sig"),
+	})
+
+	// 2) ایندکس برای گزارش اخیر بر اساس نوع sink
+	_, _ = iv.CreateOne(ctx, mongo.IndexModel{
+		Keys:    bson.D{{Key: "site_id", Value: 1}, {Key: "kind", Value: 1}, {Key: "last_detected_at", Value: -1}},
+		Options: options.Index().SetName("q_site_kind_recent"),
+	})
+
+	// 3) ایندکس برای گزارش صفحه/نوع
+	_, _ = iv.CreateOne(ctx, mongo.IndexModel{
+		Keys:    bson.D{{Key: "site_id", Value: 1}, {Key: "page_url", Value: 1}, {Key: "kind", Value: 1}},
+		Options: options.Index().SetName("q_site_page_kind"),
+	})
+
 	return nil
 }

@@ -1,3 +1,4 @@
+// handlers/ScanHandlers.go
 package handlers
 
 import (
@@ -7,12 +8,14 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
+
+	"golang.org/x/net/publicsuffix"
 )
 
 func ScanHandler(w http.ResponseWriter, r *http.Request) {
-	// اگر panic شد 500 بده، نه connection reset
 	defer func() {
 		if rec := recover(); rec != nil {
 			http.Error(w, "internal error", http.StatusInternalServerError)
@@ -52,14 +55,47 @@ func ScanHandler(w http.ResponseWriter, r *http.Request) {
 	resp.ProcessedAt = time.Now().Format(time.RFC3339)
 	resp.PageDuration = time.Since(start).String()
 
-	// ذخیره در Mongo با تایم‌اوت
-	saveCtx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
-	defer cancel()
+	// ذخیره نتایج صفحه/اندپوینت‌ها
+	saveCtx, cancelSave := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancelSave()
 	if err := functions.SaveScanResults(saveCtx, req.URL, resp.Resources, resp.UniquePaths, resp.AllScripts); err != nil {
 		log.Printf("[mongo save] url=%s err=%v", req.URL, err)
-	} else {
-		log.Printf("[mongo save OK] url=%s res=%d paths=%d scripts=%d",
-			req.URL, len(resp.Resources), len(resp.UniquePaths), len(resp.AllScripts))
+	}
+
+	sinksCtx, cancelSinks := context.WithTimeout(r.Context(), 60*time.Second)
+	defer cancelSinks()
+	sinks, err := functions.ScanSinksRuntime(sinksCtx, req.URL) // ← نسخه‌ی runtime که نوشتیم
+	if err == nil && len(sinks) > 0 {
+		// siteID و urlNorm
+		u, _ := url.Parse(req.URL)
+		host := strings.ToLower(u.Hostname())
+		base, _ := publicsuffix.EffectiveTLDPlusOne(host)
+		if base == "" {
+			base = host
+		}
+		urlNorm := u.Scheme + "://" + u.Host + u.EscapedPath()
+		if u.RawQuery != "" {
+			urlNorm += "?" + u.RawQuery
+		}
+
+		for i := range sinks {
+			if sinks[i].SiteID == "" {
+				sinks[i].SiteID = base
+			}
+			if sinks[i].PageURL == "" {
+				sinks[i].PageURL = urlNorm
+			}
+		}
+
+		bwRes, bwErr := functions.PersistSinks(sinksCtx, sinks)
+		if bwErr != nil {
+			log.Printf("[sinks] persist error: %v", bwErr)
+		} else {
+			log.Printf("[sinks] bulk write matched=%d modified=%d upserted=%d",
+				bwRes.MatchedCount, bwRes.ModifiedCount, bwRes.UpsertedCount)
+		}
+	} else if err != nil {
+		log.Printf("[sinks] scan error: %v", err)
 	}
 
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")

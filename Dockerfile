@@ -1,40 +1,48 @@
-# ---------- Build stage ----------
-FROM golang:1.22-bookworm AS build
+# -------- Build stage --------
+FROM golang:1.24.5-bookworm AS build
 WORKDIR /src
-ENV GOTOOLCHAIN=go1.24.5+auto
 
+# ثابت‌ها و بهینه‌سازی دانلود ماژول‌ها
+ENV GOTOOLCHAIN=local \
+    GOPROXY=https://proxy.golang.org,direct \
+    GOSUMDB=sum.golang.org \
+    CGO_ENABLED=0
 
+# کش ماژول‌ها (نیاز به BuildKit)
 COPY go.mod go.sum ./
-RUN go mod download
+RUN --mount=type=cache,target=/go/pkg/mod \
+    go mod download
 
-
+# کد
 COPY . .
 
+# بیلد چند-معماری (Buildx این ARGها رو پاس می‌دهد)
+ARG TARGETOS=linux
+ARG TARGETARCH=amd64
+# اگر main.go در ریشه نیست مسیر را عوض کن (مثلاً ./cmd/server)
+RUN --mount=type=cache,target=/root/.cache/go-build \
+    GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
+    go build -ldflags="-s -w" -o /out/sitechecker ./.
 
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o /out/sitechecker ./.
-
-# ---------- Runtime stage ----------
+# -------- Runtime stage --------
 FROM debian:bookworm-slim
 
 ENV DEBIAN_FRONTEND=noninteractive
-
-# Chromium + فونت‌ها + CA
 RUN apt-get update && apt-get install -y --no-install-recommends \
     chromium \
-    fonts-liberation \
-    fonts-noto-color-emoji \
     ca-certificates \
     tzdata \
-    curl \
- && rm -rf /var/lib/apt/lists/*
+    fonts-liberation \
+    fonts-noto-color-emoji \
+  && rm -rf /var/lib/apt/lists/*
 
+# متغیرهای مفید
+ENV CHROME_BIN=/usr/bin/chromium \
+    PORT=8080 \
+    LANG=C.UTF-8
 
-ENV CHROME_BIN=/usr/bin/chromium
-
-
+# باینری
 COPY --from=build /out/sitechecker /usr/local/bin/sitechecker
 
 EXPOSE 8080
-
-
 ENTRYPOINT ["/usr/local/bin/sitechecker"]

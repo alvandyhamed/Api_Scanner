@@ -3,7 +3,9 @@ package functions
 import (
 	"SiteChecker/models"
 	"context"
-	"log"
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
 	"net/url"
 	"path"
 	"strings"
@@ -20,9 +22,9 @@ func SaveScanResults(ctx context.Context, rawURL string, resources, endpoints, s
 	if err != nil {
 		return err
 	}
+
 	scheme := strings.ToLower(u.Scheme)
 	host := strings.ToLower(u.Hostname())
-
 	p := u.EscapedPath()
 	if p == "" {
 		p = "/"
@@ -40,7 +42,16 @@ func SaveScanResults(ctx context.Context, rawURL string, resources, endpoints, s
 	siteID := base
 	now := time.Now()
 
-	resSite, err := models.SitesColl().UpdateByID(ctx, siteID,
+	// 0) گروه‌بندی داخلی/خارجی
+	inEP, extEP := splitInternalExternal(endpoints, host)
+	inRES, extRES := splitInternalExternal(resources, host)
+	// scripts خارجی/داخلی
+	inSCR, extSCR := splitInternalExternal(scriptURLs, host)
+	// ساخت externals map
+	externals := makeExternalsMap(extEP, extRES, extSCR)
+
+	// 1) Site upsert
+	_, err = models.SitesColl().UpdateByID(ctx, siteID,
 		bson.M{
 			"$set": bson.M{
 				"updated_at":   now,
@@ -53,16 +64,13 @@ func SaveScanResults(ctx context.Context, rawURL string, resources, endpoints, s
 		mopts.Update().SetUpsert(true),
 	)
 	if err != nil {
-		log.Printf("[mongo sites ERR] id=%s err=%v", siteID, err)
 		return err
 	}
-	log.Printf("[mongo sites] matched=%d modified=%d upserted=%v",
-		resSite.MatchedCount, resSite.ModifiedCount, resSite.UpsertedID)
 
-	groupsEP := groupPaths(endpoints, host)
-	groupsRES := groupPaths(resources, host)
+	groupsEP := groupPaths(inEP, host)
+	groupsRES := groupPaths(inRES, host)
 
-	resPage, err := models.PagesColl().UpdateOne(ctx,
+	_, err = models.PagesColl().UpdateOne(ctx,
 		bson.M{"url_norm": urlNorm},
 		bson.M{
 			"$set": bson.M{
@@ -72,11 +80,12 @@ func SaveScanResults(ctx context.Context, rawURL string, resources, endpoints, s
 				"path":            p,
 				"url":             rawURL,
 				"url_norm":        urlNorm,
-				"resources":       resources,
-				"script_urls":     scriptURLs,
-				"endpoints":       endpoints,
+				"resources":       inRES,
+				"script_urls":     inSCR,
+				"endpoints":       inEP,
 				"groups":          groupsEP,
 				"resource_groups": groupsRES,
+				"externals":       externals,
 				"scanned_at":      now,
 			},
 			"$setOnInsert": bson.M{"created_at": now},
@@ -84,25 +93,18 @@ func SaveScanResults(ctx context.Context, rawURL string, resources, endpoints, s
 		mopts.Update().SetUpsert(true),
 	)
 	if err != nil {
-		log.Printf("[mongo pages ERR] url_norm=%s err=%v", urlNorm, err)
 		return err
 	}
-	log.Printf("[mongo pages] matched=%d modified=%d upserted=%v",
-		resPage.MatchedCount, resPage.ModifiedCount, resPage.UpsertedID)
 
-	for _, ep := range endpoints {
+	for _, ep := range inEP {
 		cat := categorize(host, ep)
-
 		filter := bson.M{"site_id": siteID, "endpoint": ep}
-
 		update := mongo.Pipeline{
 			{{"$set", bson.M{
-
 				"first_seen": bson.M{"$ifNull": bson.A{"$first_seen", now}},
 				"last_seen":  now,
 				"seen_count": bson.M{"$add": bson.A{bson.M{"$ifNull": bson.A{"$seen_count", 0}}, 1}},
 				"hosts":      bson.M{"$setUnion": bson.A{bson.M{"$ifNull": bson.A{"$hosts", bson.A{}}}, bson.A{host}}},
-
 				"source_urls": bson.M{
 					"$slice": bson.A{
 						bson.M{
@@ -117,29 +119,114 @@ func SaveScanResults(ctx context.Context, rawURL string, resources, endpoints, s
 				"category": cat,
 			}}},
 		}
-
-		resEp, err := models.EndpointsColl().UpdateOne(ctx, filter, update, mopts.Update().SetUpsert(true))
-		if err != nil {
-			log.Printf("[mongo endpoints ERR] site=%s ep=%s err=%v", siteID, ep, err)
+		if _, err := models.EndpointsColl().UpdateOne(ctx, filter, update, mopts.Update().SetUpsert(true)); err != nil {
 			return err
 		}
-		_ = resEp
+	}
+
+	sinks, err := ScanSinks(ctx, urlNorm, siteID)
+	if err == nil && len(sinks) > 0 {
+
+		for _, s := range sinks {
+			_, _ = models.SinksColl().UpdateOne(ctx,
+				bson.M{
+					"site_id": s.SiteID, "page_url": s.PageURL,
+					"source_url": s.SourceURL, "kind": s.Kind,
+					"line": s.Line, "col": s.Col, "snippet": s.Snippet,
+				},
+				bson.M{
+					"$setOnInsert": s,
+					"$set":         bson.M{"detected_at": time.Now()},
+				},
+				mopts.Update().SetUpsert(true),
+			)
+		}
 	}
 
 	return nil
 }
 
+// --- helpers ---
+
+func splitInternalExternal(items []string, pageHost string) (internal []string, extern map[string][]string) {
+	extern = make(map[string][]string)
+	for _, it := range uniqueStrings(items) {
+		if it == "" {
+			continue
+		}
+
+		iu, err := url.Parse(it)
+		if err == nil && iu.IsAbs() {
+			if !sameETLDPlusOne(iu.Hostname(), pageHost) {
+				key := eTLD1(iu.Hostname())
+				extern[key] = append(extern[key], it)
+				continue
+			}
+			internal = append(internal, it)
+			continue
+		}
+
+		internal = append(internal, it)
+	}
+	return internal, extern
+}
+
+func makeExternalsMap(extEP, extRES map[string][]string, extSCR map[string][]string) map[string]models.ExternalGroup {
+	out := map[string]models.ExternalGroup{}
+	for k, v := range extEP {
+		eg := out[k]
+		eg.SiteID = k
+		eg.Endpoints = append(eg.Endpoints, uniqueStrings(v)...)
+		out[k] = eg
+	}
+	for k, v := range extRES {
+		eg := out[k]
+		eg.SiteID = k
+		eg.Resources = append(eg.Resources, uniqueStrings(v)...)
+		out[k] = eg
+	}
+	for k, v := range extSCR {
+		eg := out[k]
+		eg.SiteID = k
+		eg.Scripts = append(eg.Scripts, uniqueStrings(v)...)
+		out[k] = eg
+	}
+
+	for k, eg := range out {
+		hostset := map[string]struct{}{}
+		for _, arr := range [][]string{eg.Endpoints, eg.Resources, eg.Scripts} {
+			for _, u := range arr {
+				if pu, err := url.Parse(u); err == nil && pu.Host != "" {
+					hostset[pu.Hostname()] = struct{}{}
+				}
+			}
+		}
+		hosts := make([]string, 0, len(hostset))
+		for h := range hostset {
+			hosts = append(hosts, h)
+		}
+		eg.Hosts = hosts
+		out[k] = eg
+	}
+	return out
+}
+
+func sameETLDPlusOne(a, b string) bool {
+	return eTLD1(a) == eTLD1(b)
+}
+func eTLD1(h string) string {
+	if h == "" {
+		return ""
+	}
+	if base, err := publicsuffix.EffectiveTLDPlusOne(strings.ToLower(h)); err == nil && base != "" {
+		return base
+	}
+	return strings.ToLower(h)
+}
+
 func groupPaths(items []string, host string) map[string][]string {
 	out := map[string][]string{
-		"api":        {},
-		"javascript": {},
-		"html":       {},
-		"asp":        {},
-		"aspx":       {},
-		"php":        {},
-		"jsp":        {},
-		"others":     {},
-		"routes":     {},
+		"api": {}, "javascript": {}, "html": {}, "asp": {}, "aspx": {}, "php": {}, "jsp": {}, "others": {}, "routes": {},
 	}
 	seen := make(map[string]struct{}, len(items))
 	for _, it := range items {
@@ -156,9 +243,8 @@ func groupPaths(items []string, host string) map[string][]string {
 	return out
 }
 
-func categorize(host, p string) string {
-	s := strings.ToLower(p)
-
+func categorize(host, pth string) string {
+	s := strings.ToLower(pth)
 	base := s
 	if i := strings.IndexByte(base, '?'); i >= 0 {
 		base = base[:i]
@@ -167,7 +253,6 @@ func categorize(host, p string) string {
 		base = base[:j]
 	}
 	ext := strings.ToLower(path.Ext(base))
-
 	switch ext {
 	case ".js":
 		return "javascript"
@@ -182,14 +267,78 @@ func categorize(host, p string) string {
 	case ".jsp":
 		return "jsp"
 	}
-
 	if ext != "" {
 		return "others"
 	}
-
 	if strings.HasPrefix(host, "api.") || strings.Contains(s, "/api") {
 		return "api"
 	}
-
 	return "routes"
+}
+func sinkSig(siteID, pageURL, sourceURL, kind string, line, col int, snippet string) string {
+	if len(snippet) > 1000 {
+		snippet = snippet[:1000]
+	}
+	sum := sha256.Sum256([]byte(siteID + "\x1f" + pageURL + "\x1f" + sourceURL + "\x1f" + kind +
+		"\x1f" + fmt.Sprintf("%d:%d", line, col) + "\x1f" + snippet))
+	return hex.EncodeToString(sum[:])
+}
+
+func PersistSinks(ctx context.Context, sinks []models.SinkDoc) (*mongo.BulkWriteResult, error) {
+	if len(sinks) == 0 {
+		return &mongo.BulkWriteResult{}, nil
+	}
+
+	// دِدوپ داخل همین batch
+	uniq := make(map[string]models.SinkDoc, len(sinks))
+	for _, s := range sinks {
+		if s.SiteID == "" || s.PageURL == "" {
+			continue
+		}
+		if len(s.Snippet) > 1000 {
+			s.Snippet = s.Snippet[:1000]
+		}
+		sig := sinkSig(s.SiteID, s.PageURL, s.SourceURL, s.Kind, s.Line, s.Col, s.Snippet)
+		sn := s
+		// می‌تونی sig رو هم تو سند نگه داری
+		uniq[sig] = sn
+	}
+
+	if len(uniq) == 0 {
+		return &mongo.BulkWriteResult{}, nil
+	}
+
+	now := time.Now()
+	modelsBW := make([]mongo.WriteModel, 0, len(uniq))
+
+	for sig, s := range uniq {
+		filter := bson.M{"sig": sig}
+		update := bson.M{
+			"$setOnInsert": bson.M{
+				"sig":               sig,
+				"site_id":           s.SiteID,
+				"page_url":          s.PageURL,
+				"source_url":        s.SourceURL,
+				"kind":              s.Kind,
+				"line":              s.Line,
+				"col":               s.Col,
+				"snippet":           s.Snippet,
+				"first_detected_at": s.DetectedAt,
+			},
+			"$set": bson.M{
+				"last_detected_at": now,
+				"source_type":      s.SourceType, // فقط اینجا
+			},
+			"$inc": bson.M{
+				"hits": 1, // فقط اینجا
+			},
+		}
+		modelsBW = append(modelsBW, mongo.NewUpdateOneModel().
+			SetFilter(filter).
+			SetUpdate(update).
+			SetUpsert(true))
+	}
+
+	opts := mopts.BulkWrite().SetOrdered(false)
+	return models.SinksColl().BulkWrite(ctx, modelsBW, opts)
 }
