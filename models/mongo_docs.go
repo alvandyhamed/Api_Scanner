@@ -47,6 +47,7 @@ type EndpointDoc struct {
 	SeenCount  int64     `bson:"seen_count,omitempty"`
 	Category   string    `bson:"category,omitempty"`
 }
+
 type SinkDoc struct {
 	SiteID     string    `bson:"site_id"`
 	PageURL    string    `bson:"page_url"`
@@ -55,6 +56,7 @@ type SinkDoc struct {
 	Kind       string    `bson:"kind"`
 	Line       int       `bson:"line,omitempty"`
 	Col        int       `bson:"col,omitempty"`
+	Func       string    `bson:"func,omitempty"`
 	Snippet    string    `bson:"snippet,omitempty"`
 	DetectedAt time.Time `bson:"detected_at"`
 }
