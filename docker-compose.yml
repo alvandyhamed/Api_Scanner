@@ -1,15 +1,36 @@
 version: "3.8"
 
 services:
+  mongo:
+    image: mongo:6.0
+    container_name: sitechecker-mongo
+    command: ["--bind_ip_all"]
+    ports:
+      - "27018:27017"
+    volumes:
+      - mongo-data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.runCommand({ ping: 1 })"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+    restart: unless-stopped
+
   sitechecker:
     build: .
     image: sitechecker:dev
+    container_name: sitechecker-app
     ports:
-      - "8080:8080"
-    # مهم برای کروم؛ بدونش ممکنه کرش کنه
+      - "8050:8050"
     shm_size: "1g"
-    # init برای جمع‌کردن بچه‌پردازش‌ها (chrome)
     init: true
     environment:
       - TZ=Europe/Berlin
+      - MONGO_URI=mongodb://mongo:27017/sitechecker
+    depends_on:
+      mongo:
+        condition: service_healthy
     restart: unless-stopped
+
+volumes:
+  mongo-data:

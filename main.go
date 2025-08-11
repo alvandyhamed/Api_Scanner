@@ -2,8 +2,13 @@ package main
 
 import (
 	"SiteChecker/handlers"
+	"SiteChecker/models"
+	"context"
 	"log"
 	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
 	"time"
 )
 
@@ -11,15 +16,43 @@ import (
 // the <icon src="AllIcons.Actions.Execute"/> icon in the gutter and select the <b>Run</b> menu item from here.</p>
 
 func main() {
+	rootCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	if err := models.InitMongo(rootCtx); err != nil {
+		log.Fatal("mongo init error: ", err)
+	}
+	if err := models.EnsureIndexes(rootCtx); err != nil {
+		log.Println("mongo index warn: ", err)
+	}
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = models.Mongo.Disconnect(ctx)
+	}()
 	mux := http.NewServeMux()
 	mux.HandleFunc("/scan", handlers.ScanHandler)
 	srv := &http.Server{
-		Addr:         ":8080",
+		Addr:         ":8050",
 		Handler:      mux,
 		ReadTimeout:  30 * time.Second,
 		WriteTimeout: 120 * time.Second,
 	}
-	log.Println("listening on :8080")
-	log.Fatal(srv.ListenAndServe())
+
+	go func() {
+		log.Println("listening on :8050")
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("server error: %v", err)
+		}
+	}()
+
+	<-rootCtx.Done()
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		log.Printf("http shutdown error: %v", err)
+	}
+	log.Println("server stopped")
+
+	//log.Fatal(srv.ListenAndServe())
 
 }
