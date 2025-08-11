@@ -14,17 +14,19 @@ type SiteDoc struct {
 }
 
 type PageDoc struct {
-	SiteID     string    `bson:"site_id"`
-	URL        string    `bson:"url"`
-	URLNorm    string    `bson:"url_norm"`
-	Scheme     string    `bson:"scheme"`
-	Host       string    `bson:"host"`
-	Path       string    `bson:"path"`
-	Resources  []string  `bson:"resources,omitempty"`
-	ScriptURLs []string  `bson:"script_urls,omitempty"`
-	Endpoints  []string  `bson:"endpoints,omitempty"`
-	ScannedAt  time.Time `bson:"scanned_at"`
-	CreatedAt  time.Time `bson:"created_at,omitempty"`
+	SiteID         string              `bson:"site_id"`
+	URL            string              `bson:"url"`
+	URLNorm        string              `bson:"url_norm"`
+	Scheme         string              `bson:"scheme"`
+	Host           string              `bson:"host"`
+	Path           string              `bson:"path"`
+	Resources      []string            `bson:"resources,omitempty"`
+	ScriptURLs     []string            `bson:"script_urls,omitempty"`
+	Endpoints      []string            `bson:"endpoints,omitempty"`
+	ScannedAt      time.Time           `bson:"scanned_at"`
+	CreatedAt      time.Time           `bson:"created_at,omitempty"`
+	Groups         map[string][]string `bson:"groups,omitempty"`
+	ResourceGroups map[string][]string `bson:"resource_groups,omitempty"`
 }
 
 type EndpointDoc struct {
@@ -35,4 +37,5 @@ type EndpointDoc struct {
 	Hosts      []string  `bson:"hosts,omitempty"`
 	SourceURLs []string  `bson:"source_urls,omitempty"`
 	SeenCount  int64     `bson:"seen_count,omitempty"`
+	Category   string    `bson:"category,omitempty"`
 }
