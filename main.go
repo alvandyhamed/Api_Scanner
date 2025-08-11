@@ -31,6 +31,22 @@ func main() {
 	}()
 	mux := http.NewServeMux()
 	mux.HandleFunc("/scan", handlers.ScanHandler)
+	mux.HandleFunc("/api/health", handlers.WithCORS(handlers.HealthHandler))
+
+	mux.HandleFunc("/api/sites", handlers.WithCORS(handlers.SitesListHandler))
+
+	mux.HandleFunc("/api/pages", handlers.WithCORS(handlers.PagesListHandler))
+	mux.HandleFunc("/api/pages/by-url", handlers.WithCORS(handlers.PageByURLHandler))
+
+	mux.HandleFunc("/api/endpoints", handlers.WithCORS(handlers.EndpointsListHandler))
+	mux.HandleFunc("/api/endpoints/stats", handlers.WithCORS(handlers.EndpointsStatsHandler))
+
+	mux.HandleFunc("/api/sinks", handlers.WithCORS(handlers.SinksListHandler))
+	mux.HandleFunc("/api/sinks/stats", handlers.WithCORS(handlers.SinksStatsHandler))
+
+	mux.HandleFunc("/api/externals", handlers.WithCORS(handlers.ExternalsListHandler))
+	mux.HandleFunc("/api/search", handlers.WithCORS(handlers.SearchHandler))
+
 	srv := &http.Server{
 		Addr:         ":8050",
 		Handler:      mux,
