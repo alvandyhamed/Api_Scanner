@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { Search, Globe, Link2, ChevronRight, ChevronDown, AlertTriangle, ShieldAlert, PlugZap, Coffee } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
+import DomainScanner from "../componnets/Domain_Scanner.jsx";
 
 const API_BASE = ''
 const AVATAR_SRC = '/avatar.jpg'
@@ -63,6 +64,8 @@ export default function Landing(){
                         </div>
                     </div>
                 </div>
+
+                <DomainScanner />
 
                 {sites.loading ? <div className="text-zinc-500 text-sm">Loading…</div> : (
                     filteredSites.map(s=>{

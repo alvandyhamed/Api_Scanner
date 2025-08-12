@@ -31,6 +31,8 @@ func main() {
 	}()
 	mux := http.NewServeMux()
 	mux.HandleFunc("/scan", handlers.ScanHandler)
+	mux.HandleFunc("/api/scan", handlers.ScanHandler)
+
 	mux.HandleFunc("/api/health", handlers.WithCORS(handlers.HealthHandler))
 
 	mux.HandleFunc("/api/sites", handlers.WithCORS(handlers.SitesListHandler))
