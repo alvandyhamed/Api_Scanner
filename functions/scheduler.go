@@ -5,7 +5,9 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	"go.mongodb.org/mongo-driver/bson"
@@ -119,4 +121,30 @@ func max(a, b int) int {
 		return a
 	}
 	return b
+}
+
+// notifyDiscord: اگر دیسکورد فعال و وبهوک ست باشد، پیام تغییرات را ارسال می‌کند.
+func notifyDiscord(ctx context.Context, siteID, pageURL string, sum models.WatchSummary) error {
+	// خواندن تنظیمات
+	doc, err := models.GetDiscordSettings(ctx)
+	if err != nil {
+		return err
+	}
+	if !doc.Enabled || strings.TrimSpace(doc.WebhookURL) == "" {
+		// پیکربندی نشده یا غیرفعال → نوتیفای نکن
+		return nil
+	}
+
+	// ساخت پیام خلاصه
+	msg := fmt.Sprintf(
+		"🔔 *SiteChecker*\nSite: `%s`\nPage: %s\nEndpoints: %d (last: %s)\nSinks: %d (last: %s)\nTime: %s",
+		siteID,
+		pageURL,
+		sum.Endpoints, sum.LastEP.Format(time.RFC3339),
+		sum.Sinks, sum.LastSink.Format(time.RFC3339),
+		time.Now().Format(time.RFC3339),
+	)
+
+	// ارسال با وبهوک (همین پکیج: functions.SendDiscordWebhook)
+	return SendDiscordWebhook(ctx, doc.WebhookURL, msg)
 }

@@ -1,36 +1,43 @@
+// functions/discord.go
 package functions
 
 import (
-	"SiteChecker/models"
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"time"
-
-	"go.mongodb.org/mongo-driver/bson"
 )
 
-type discordMsg struct {
+type discordPayload struct {
 	Content string `json:"content"`
 }
 
-func notifyDiscord(ctx context.Context, siteID, url string, s models.WatchSummary) error {
-	// گلوبال
-	var cfg models.DiscordSetting
-	_ = models.SettingsColl().FindOne(ctx, bson.M{"_id": "discord", "enabled": true}).Decode(&cfg)
-	if cfg.WebhookURL == "" {
-		return nil
+var httpClient = &http.Client{Timeout: 10 * time.Second}
+
+func SendDiscordWebhook(ctx context.Context, webhookURL, content string) error {
+	if webhookURL == "" {
+		return errors.New("discord webhook is empty")
 	}
+	body, _ := json.Marshal(discordPayload{Content: content})
 
-	content := "🔔 **Change detected** on `" + siteID + "`\n" +
-		"URL: " + url + "\n" +
-		"Endpoints: " + itoa(s.Endpoints) + " | Sinks: " + itoa(s.Sinks) + "\n" +
-		"Time: " + time.Now().Format(time.RFC3339)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, webhookURL, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
 
-	b, _ := json.Marshal(discordMsg{Content: content})
-	rq, _ := http.NewRequestWithContext(ctx, "POST", cfg.WebhookURL, bytes.NewReader(b))
-	rq.Header.Set("Content-Type", "application/json")
-	_, _ = http.DefaultClient.Do(rq)
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("discord http error: %w", err)
+	}
+	defer resp.Body.Close()
+
+	// Discord معمولاً 204 برمی‌گردونه؛ هر 2xx رو موفق بدون.
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("discord unexpected status: %d", resp.StatusCode)
+	}
 	return nil
 }
