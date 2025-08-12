@@ -31,12 +31,15 @@ services:
     restart: unless-stopped
 
   ui:
-    build: ./ui
-    container_name: sitechecker-ui
+    build:
+      context: ./ui
+      args:
+        NPM_REGISTRY: "https://registry.npmmirror.com"   # آینه سریع؛ می‌تونی NPM رسمی هم بذاری
+      network: host    # کمک می‌کنه بیلد از DNS/Proxy میزبان استفاده کنه
     ports:
       - "8080:80"
     depends_on:
-      - sitechecker         # ← نام سرویس، نه container_name
+      - sitechecker
     restart: unless-stopped
 
 volumes:
