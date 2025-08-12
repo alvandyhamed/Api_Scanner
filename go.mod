@@ -2,7 +2,10 @@ module SiteChecker
 
 go 1.24.5
 
-require github.com/chromedp/chromedp v0.14.1
+require (
+	github.com/chromedp/chromedp v0.14.1
+	github.com/gorilla/mux v1.8.1
+)
 
 require (
 	github.com/golang/snappy v0.0.4 // indirect

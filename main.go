@@ -1,6 +1,7 @@
 package main
 
 import (
+	"SiteChecker/functions"
 	"SiteChecker/handlers"
 	"SiteChecker/models"
 	"context"
@@ -49,6 +50,15 @@ func main() {
 	mux.HandleFunc("/api/externals", handlers.WithCORS(handlers.ExternalsListHandler))
 	mux.HandleFunc("/api/search", handlers.WithCORS(handlers.SearchHandler))
 
+	mux.HandleFunc("/api/watches", handlers.WithCORS(handlers.WatchesListHandler))           // GET
+	mux.HandleFunc("/api/watches/create", handlers.WithCORS(handlers.WatchesListHandler))    // POST
+	mux.HandleFunc("/api/watches/scan-now", handlers.WithCORS(handlers.WatchScanNowHandler)) // POST
+	mux.HandleFunc("/api/watches/delete", handlers.WithCORS(handlers.WatchDeleteHandler))
+
+	mux.HandleFunc("/api/settings/discord", handlers.WithCORS(handlers.DiscordGetHandler))     // GET
+	mux.HandleFunc("/api/settings/discord/set", handlers.WithCORS(handlers.DiscordSetHandler)) // POST
+	mux.HandleFunc("/api/settings/discord/test", handlers.WithCORS(handlers.DiscordTestHandler))
+
 	srv := &http.Server{
 		Addr:         ":8050",
 		Handler:      mux,
@@ -66,6 +76,9 @@ func main() {
 	<-rootCtx.Done()
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	functions.StartWatchScheduler(ctx)
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		log.Printf("http shutdown error: %v", err)
 	}
