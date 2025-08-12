@@ -36,7 +36,26 @@ export default function Landing(){
     const nav=useNavigate();
     const {sitesSeen,pagesSeen,markSite,markPage}=useSeen()
 
-    useEffect(()=>{ const ac=new AbortController(); abortRef.current=ac; (async()=>{ try{ const d=await getJSON('/api/sites?limit=200',ac.signal); setSites({loading:false,items:d.items||[]}) }catch(e){ if(e.name!=='AbortError') setSites({loading:false,items:[]}) } })(); return ()=>ac.abort() },[])
+    const fetchSites = async (signal) => {
+        const d = await getJSON('/api/sites?limit=200', signal);
+        setSites({loading:false, items: d.items || []});
+    };
+
+
+    useEffect(() => {
+        const ac = new AbortController();
+        fetchSites(ac.signal).catch(()=> setSites({loading:false, items:[]}));
+        return () => ac.abort();
+    }, []);
+    const refreshSitesWithRetry = async () => {
+        for (let i=0; i<5; i++) {                // تا ۵ بار تلاش
+            try {
+                await fetchSites();                  // (بدون signal)
+                break;
+            } catch {}
+            await new Promise(r => setTimeout(r, 1500)); // 1.5s فاصله
+        }
+    };
 
     async function toggleSite(siteId){
         const open=!!expanded[siteId]; setExpanded(s=>({...s,[siteId]:!open}))
@@ -65,7 +84,7 @@ export default function Landing(){
                     </div>
                 </div>
 
-                <DomainScanner />
+                <DomainScanner onScanned={refreshSitesWithRetry}/>
 
                 {sites.loading ? <div className="text-zinc-500 text-sm">Loading…</div> : (
                     filteredSites.map(s=>{

@@ -1,11 +1,11 @@
-import React, { useState, useRef } from "react";
+import React, {useRef, useState} from "react";
 
 // Drop this component anywhere in your app (plain JS version)
 // Adjust SCAN_API to your backend endpoint (e.g., "/scan" for Go service)
 const API_BASE = import.meta.env.VITE_API_BASE || "";
 const SCAN_API = `${API_BASE}/api/scan`;
 
-export default function DomainScanner() {
+export default function DomainScanner({onScanned}) {
     const [domain, setDomain] = useState("");
     const [status, setStatus] = useState("idle"); // idle | loading | success | error
     const [message, setMessage] = useState("");
@@ -40,29 +40,32 @@ export default function DomainScanner() {
         setMessage("");
 
         try {
-            const body = { url: domain.trim() };
-            console.log(SCAN_API)
+            const body = {url: domain.trim(),wait_sec: 7, js_fetch_timeout: 8};
+
             const res = await fetch(SCAN_API, {
 
                 method: "POST",
-                headers: { "Content-Type": "application/json" },
+                headers: {"Content-Type": "application/json"},
                 body: JSON.stringify(body),
             });
 
             if (!res.ok) {
                 const txt = await res.text();
-                console.log(res)
+
                 throw new Error(txt || `HTTP ${res.status}`);
             }
+
+
 
             // server response (adjust to your API)
             const data = await res.json().catch(() => ({}));
             setStatus("success");
-            setMessage(data?.message || "اسکن با موفقیت شروع شد.");
+            setMessage(data?.message || "Scan completed successfully.");
             setDomain("");
+            onScanned && onScanned();
         } catch (err) {
             setStatus("error");
-            setMessage(err?.message || "خطا در شروع اسکن");
+            setMessage(err?.message || "❌ Error starting scan");
         }
     };
 
@@ -100,23 +103,23 @@ export default function DomainScanner() {
 
             {status === "loading" && (
                 <div style={styles.progressBar}>
-                    <div style={styles.progressIndeterminate} />
+                    <div style={styles.progressIndeterminate}/>
                 </div>
             )}
 
             {status === "success" && (
-                <div style={{ ...styles.note, color: "#0a7" }}>{message}</div>
+                <div style={{...styles.note, color: "#0a7"}}>{message}</div>
             )}
             {status === "error" && (
-                <div style={{ ...styles.note, color: "#c33" }}>{message}</div>
+                <div style={{...styles.note, color: "#c33"}}>{message}</div>
             )}
         </div>
     );
 }
 
 const styles = {
-    wrap: { display: "grid", gap: 10, maxWidth: 720, margin: "12px auto" },
-    row: { display: "grid", gridTemplateColumns: "1fr 120px", gap: 8 },
+    wrap: {display: "grid", gap: 10, maxWidth: 720, margin: "12px auto"},
+    row: {display: "grid", gridTemplateColumns: "1fr 120px", gap: 8},
     inputWrap: {
         position: "relative",
         display: "flex",
@@ -171,7 +174,7 @@ const styles = {
         background: "#2b6ff7",
         borderRadius: 999,
     },
-    note: { fontSize: 13 },
+    note: {fontSize: 13},
 };
 
 // Simple keyframes via style tag (guarded for SSR)
