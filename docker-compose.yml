@@ -1,5 +1,3 @@
-version: "3.8"
-
 services:
   mongo:
     image: mongo:6.0
@@ -30,6 +28,15 @@ services:
     depends_on:
       mongo:
         condition: service_healthy
+    restart: unless-stopped
+
+  ui:
+    build: ./ui
+    container_name: sitechecker-ui
+    ports:
+      - "8080:80"
+    depends_on:
+      - sitechecker         # ← نام سرویس، نه container_name
     restart: unless-stopped
 
 volumes:
