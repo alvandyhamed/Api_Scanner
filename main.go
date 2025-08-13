@@ -51,7 +51,7 @@ func main() {
 	mux.HandleFunc("/api/search", handlers.WithCORS(handlers.SearchHandler))
 
 	mux.HandleFunc("/api/watches", handlers.WithCORS(handlers.WatchesListHandler))           // GET
-	mux.HandleFunc("/api/watches/create", handlers.WithCORS(handlers.WatchesListHandler))    // POST
+	mux.HandleFunc("/api/watches/create", handlers.WithCORS(handlers.WatchCreateHandler))    // POST
 	mux.HandleFunc("/api/watches/scan-now", handlers.WithCORS(handlers.WatchScanNowHandler)) // POST
 	mux.HandleFunc("/api/watches/delete", handlers.WithCORS(handlers.WatchDeleteHandler))
 

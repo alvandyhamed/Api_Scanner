@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import { Search, Globe, Link2, ChevronRight, ChevronDown, AlertTriangle, ShieldAlert, PlugZap, Eye, EyeOff } from 'lucide-react'
+import { Search, Globe, Link2, ChevronRight, ChevronDown, AlertTriangle, ShieldAlert, PlugZap, Eye, EyeOff, Timer } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import DomainScanner from "../componnets/DomainScanner.jsx";
 
@@ -21,12 +21,28 @@ async function postJSON(path, body){
     try { return await res.json() } catch { return {} }
 }
 
+// ---- utils
 function timeAgo(iso){
     try{
         const d=new Date(iso); const s=((Date.now()-d)/1000|0);
         if(s<60) return s+"s ago"; const m=s/60|0; if(m<60) return m+"m ago";
         const h=m/60|0; if(h<24) return h+"h ago"; return (h/24|0)+"d ago"
     }catch{return''}
+}
+function msToDHm(ms){
+    if (ms <= 0) return "now"
+    const s = Math.floor(ms/1000)
+    const d = Math.floor(s/86400)
+    const h = Math.floor((s%86400)/3600)
+    const m = Math.floor((s%3600)/60)
+    if (d > 0) return `${d}d ${h}h`
+    if (h > 0) return `${h}h ${m}m`
+    return `${m}m`
+}
+function timeUntil(iso){
+    if(!iso) return ""
+    const t = new Date(iso).getTime()
+    return msToDHm(t - Date.now())
 }
 function StatusDot({ state }){
     const c= state==='danger'?'bg-red-500'
@@ -38,7 +54,20 @@ function StatusDot({ state }){
 function safeHost(u){ try{return new URL(u).hostname}catch{return''} }
 function safePath(u){ try{return new URL(u).pathname||'/'}catch{return'/'} }
 function trimMid(s,n){ if(!s) return ''; if(s.length<=n) return s; const k=(n/2|0)-2; return s.slice(0,k)+'…'+s.slice(-k) }
+function normalizeUrl(u){
+    try{
+        const x = new URL(u)
+        // نرمال‌سازی اسلش آخر
+        if(!x.pathname) x.pathname = '/'
+        if(!x.pathname.endsWith('/')) {
+            // فقط برای root اسلش بذاریم
+            if (x.pathname === '') x.pathname = '/'
+        }
+        return x.toString()
+    }catch{return u}
+}
 
+// local seen
 const LS_SITES='sitechecker:lastSeen:sites';
 function useSeen(){
     const [sitesSeen,setSitesSeen]=useState(()=>{try{return JSON.parse(localStorage.getItem(LS_SITES)||"{}")}catch{return{}}})
@@ -56,11 +85,13 @@ export default function Home(){
     const [statusBySite,setStatusBySite]=useState({})
     const [selectedSite,setSelectedSite]=useState(null)
     const [alerts,setAlerts]=useState({sinks:[],assets:[],loading:false})
-    const [watchesBySite, setWatchesBySite] = useState({}) // { [siteId]: {loading, items: []} }
+    // watches: { [siteId]: { loading, items, mapByUrlNorm } }
+    const [watchesBySite, setWatchesBySite] = useState({})
 
     const nav=useNavigate();
     const {sitesSeen,markSite}=useSeen()
 
+    // ---- load sites
     const fetchSites = async (signal) => {
         const d = await getJSON('/api/sites?limit=200', signal);
         setSites({loading:false, items: d.items || []});
@@ -77,6 +108,7 @@ export default function Home(){
         }
     };
 
+    // ---- site open
     async function toggleSite(siteId){
         const open=!!expanded[siteId]; setExpanded(s=>({...s,[siteId]:!open}))
         if(!open && !pagesBySite[siteId]){
@@ -88,12 +120,13 @@ export default function Home(){
                 setPagesBySite(p=>({...p,[siteId]:{loading:false,items:[]}}))
             }
             await computeStatus(siteId);
-            await loadWatches(siteId);
+            await loadWatchesMerged(siteId); // ← هردو حالت www و بدون www
             setSelectedSite(siteId);
             markSite(siteId);
             loadAlerts(siteId);
         }
     }
+
     async function computeStatus(siteId){
         try{
             const [sr,er]=await Promise.all([
@@ -111,6 +144,7 @@ export default function Home(){
             setStatusBySite(s=>({...s,[siteId]:{state:'none'}}))
         }
     }
+
     async function loadAlerts(siteId){
         setAlerts(a=>({...a,loading:true}));
         try{
@@ -124,16 +158,36 @@ export default function Home(){
         }
     }
 
-    // Watches
-    async function loadWatches(siteId){
-        setWatchesBySite(w=>({...w, [siteId]: {loading:true, items:[]}}))
+    // ---- watches
+    function siteVariants(id){
+        const set = new Set([id])
+        if (id.startsWith('www.')) set.add(id.slice(4))
+        else set.add('www.'+id)
+        return Array.from(set)
+    }
+    async function loadWatchesMerged(siteId){
+        setWatchesBySite(w=>({...w, [siteId]: {loading:true, items:[], mapByUrlNorm:{}}}))
+        const vars = siteVariants(siteId)
         try{
-            const d = await getJSON(`/api/watches?site_id=${encodeURIComponent(siteId)}`)
-            setWatchesBySite(w=>({...w, [siteId]: {loading:false, items:d.items||[]}}))
+            const all=[]
+            for (const sid of vars){
+                try{
+                    const d = await getJSON(`/api/watches?site_id=${encodeURIComponent(sid)}`)
+                    if (d.items) all.push(...d.items)
+                }catch{ /* ignore */ }
+            }
+            // ساخت map بر اساس url_norm نرمال‌شده
+            const map = {}
+            for (const it of all){
+                const key = normalizeUrl(it.url_norm || it.url)
+                map[key] = it
+            }
+            setWatchesBySite(w=>({...w, [siteId]: {loading:false, items:all, mapByUrlNorm:map}}))
         }catch{
-            setWatchesBySite(w=>({...w, [siteId]: {loading:false, items:[]}}))
+            setWatchesBySite(w=>({...w, [siteId]: {loading:false, items:[], mapByUrlNorm:{}}}))
         }
     }
+
     async function createWatch(url, freq_min=1440){
         await postJSON('/api/watches/create', { url, freq_min, enabled:true })
     }
@@ -146,12 +200,33 @@ export default function Home(){
     async function changeWatchFreq(w, newFreq){
         await postJSON('/api/watches/create', { url: w.url || w.url_norm, freq_min:newFreq, enabled:true })
     }
-    async function toggleWatch(url_norm, isWatched, siteId){
-        if(isWatched) await deleteWatch(url_norm);
-        else await createWatch(url_norm, 1440);
-        await loadWatches(siteId);
+    async function hasWatch(siteId, urlNorm) {
+        const key = normalizeUrl(urlNorm);
+        return !!watchesBySite[siteId]?.mapByUrlNorm?.[key];
+
+
+    }
+    async function toggleWatch(url_norm, siteId){
+        const key = normalizeUrl(url_norm);
+
+        const exists = hasWatch(siteId, key);
+        if (exists){
+            await deleteWatch(key)
+            await loadWatchesMerged(siteId)
+            return true
+        }else {
+            const input=document.getElementById(`watch-url-${siteId}`)
+            if(input){
+                input.value=key;
+                input.focus();
+                input.scrollIntoView({behavior:'smooth',block:'center'})
+            }
+            return false
+        }
+
     }
 
+    // ---- filter
     const filteredSites=useMemo(()=>{
         const q=query.trim().toLowerCase();
         if(!q) return sites.items;
@@ -167,7 +242,7 @@ export default function Home(){
         for(const p of (pages||[])){
             const host=p.host||safeHost(p.url_norm||p.url);
             const path=p.path||safePath(p.url_norm||p.url);
-            (out[host] ||= []).push({ path, url_norm:p.url_norm||p.url, scanned_at:p.scanned_at });
+            (out[host] ||= []).push({ path, url_norm: normalizeUrl(p.url_norm||p.url), scanned_at:p.scanned_at });
         }
         return Object.entries(out)
             .sort(([a],[b])=>a.localeCompare(b))
@@ -207,8 +282,8 @@ export default function Home(){
                         const stat=statusBySite[siteId]?.state||'none';
                         const ps=pagesBySite[siteId];
                         const grouped=open?groupByHost(ps?.items||[]):[];
-                        const ws = watchesBySite[siteId] || {loading:false, items:[]};
-                        const watchedSet = new Set((ws.items||[]).map(i=>i.url_norm));
+                        const ws = watchesBySite[siteId] || {loading:false, items:[], mapByUrlNorm:{}};
+                        const watchMap = ws.mapByUrlNorm || {};
 
                         return (
                             <div key={siteId} className="rounded-2xl bg-white border border-zinc-200 shadow-sm overflow-hidden">
@@ -218,7 +293,6 @@ export default function Home(){
                                     <div className="min-w-0">
                                         <div className="truncate font-medium flex items-center gap-2">
                                             {siteId}
-                                            {/* تعداد Watchهای این سایت */}
                                             {!!ws.items?.length && (
                                                 <span className="text-xs px-2 py-0.5 rounded-full bg-zinc-100 text-zinc-700">
                           {ws.items.length} watched
@@ -235,7 +309,7 @@ export default function Home(){
 
                                 {open && (
                                     <div className="px-2 pb-4 space-y-4">
-                                        {/* Watch Manager (فرم افزودن سریع) */}
+                                        {/* Watch Manager */}
                                         <div className="px-3 pt-3">
                                             <div className="text-sm font-medium mb-2">Watches</div>
 
@@ -260,7 +334,7 @@ export default function Home(){
                                                         if(!url) return;
                                                         await createWatch(url, freq);
                                                         document.getElementById(`watch-url-${siteId}`).value='';
-                                                        await loadWatches(siteId);
+                                                        await loadWatchesMerged(siteId);
                                                     }}
                                                 >Add</button>
                                             </div>
@@ -276,9 +350,17 @@ export default function Home(){
                                                         <div className="px-3 py-2 text-sm text-zinc-700 flex items-center gap-2"><Link2 className="h-4 w-4"/>{host}</div>
                                                         <div className="mt-1 space-y-1">
                                                             {pages.map(p=> {
-                                                                const isWatched = watchedSet.has(p.url_norm);
+                                                                const key = normalizeUrl(p.url_norm)
+                                                                const w   = watchMap[key]
+                                                                const isWatched = !!w
+                                                                const nextIn = isWatched ? timeUntil(w.next_run_at) : ""
+
                                                                 return (
-                                                                    <div key={p.url_norm} className="w-full px-3 py-2 rounded-xl bg-white hover:border-zinc-200 border border-transparent flex items-center justify-between gap-2">
+                                                                    <div
+                                                                        key={p.url_norm}
+                                                                        className="w-full px-3 py-2 rounded-xl bg-white hover:border-zinc-200 border border-transparent flex items-center justify-between gap-2"
+                                                                        onDoubleClick={async()=>{ await toggleWatch(p.url_norm, siteId) }} // دابل‌کلیک → toggle
+                                                                    >
                                                                         <button
                                                                             onClick={()=> nav(`/site/${encodeURIComponent(siteId)}?url=${encodeURIComponent(p.url_norm)}`)}
                                                                             className="text-left min-w-0"
@@ -286,25 +368,39 @@ export default function Home(){
                                                                             <div className="truncate text-sm">{p.path}</div>
                                                                             <div className="truncate text-xs text-zinc-500">{p.url_norm}</div>
                                                                         </button>
+
                                                                         <div className="shrink-0 flex items-center gap-2">
                                                                             {isWatched ? (
-                                                                                <button
-                                                                                    className="px-2 py-1 rounded-md text-xs border border-zinc-300 inline-flex items-center gap-1"
-                                                                                    title="Unwatch"
-                                                                                    onClick={async()=> toggleWatch(p.url_norm, true, siteId)}
-                                                                                >
-                                                                                    <Eye className="h-3.5 w-3.5"/> Watched
-                                                                                </button>
+                                                                                <>
+      <span className="inline-flex items-center gap-1 text-xs text-zinc-600">
+        <Timer className="h-3.5 w-3.5"/>{nextIn}
+      </span>
+                                                                                    <button
+                                                                                        className="px-2 py-1 rounded-md text-xs border border-zinc-300 inline-flex items-center gap-1"
+                                                                                        title="Unwatch"
+                                                                                        onClick={() => toggleWatch(p.url_norm, siteId)}   // ← Unwatch واقعی
+                                                                                    >
+                                                                                        <EyeOff className="h-3.5 w-3.5"/> Unwatch
+                                                                                    </button>
+                                                                                </>
                                                                             ) : (
                                                                                 <button
                                                                                     className="px-2 py-1 rounded-md text-xs border border-zinc-300 inline-flex items-center gap-1"
-                                                                                    title="Watch"
-                                                                                    onClick={async()=> toggleWatch(p.url_norm, false, siteId)}
+                                                                                    title="Watch (choose frequency above then Add)"
+                                                                                    onClick={() => {
+                                                                                        const input = document.getElementById(`watch-url-${siteId}`);
+                                                                                        if (input) {
+                                                                                            input.value = p.url_norm;                      // فقط پر کردن فرم
+                                                                                            input.focus();
+                                                                                            input.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                                                                                        }
+                                                                                    }}
                                                                                 >
-                                                                                    <EyeOff className="h-3.5 w-3.5"/> Watch
+                                                                                    <Eye className="h-3.5 w-3.5"/> Watch
                                                                                 </button>
                                                                             )}
                                                                         </div>
+
                                                                     </div>
                                                                 )
                                                             })}

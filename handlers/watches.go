@@ -42,6 +42,7 @@ func deriveSiteAndNorm(rawURL string) (siteID, urlNorm string) {
 func WatchesListHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		badRequest(w, "GET only")
+		http.Error(w, "GET only", http.StatusMethodNotAllowed)
 		return
 	}
 	q := bson.M{}
@@ -74,6 +75,7 @@ func WatchCreateHandler(w http.ResponseWriter, r *http.Request) {
 		badRequest(w, "POST only")
 		return
 	}
+
 	var req watchCreateReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		badRequest(w, "invalid json")
@@ -92,36 +94,36 @@ func WatchCreateHandler(w http.ResponseWriter, r *http.Request) {
 		siteID = req.SiteID
 	}
 	now := time.Now()
-	doc := models.WatchDoc{
-		SiteID:    siteID,
-		URL:       req.URL,
-		URLNorm:   urlNorm,
-		Enabled:   req.Enabled,
-		FreqMin:   req.FreqMin,
-		NextRunAt: now,
-		CreatedAt: now,
-		UpdatedAt: now,
+	next := now.Add(time.Duration(req.FreqMin) * time.Minute)
+
+	filter := bson.M{"site_id": siteID, "url_norm": urlNorm}
+
+	update := bson.M{
+		"$set": bson.M{
+			"site_id":     siteID, // در هر حالتی ست کنیم تا همواره درست بماند
+			"url":         req.URL,
+			"url_norm":    urlNorm,
+			"enabled":     req.Enabled,
+			"freq_min":    req.FreqMin,
+			"next_run_at": next,
+			"updated_at":  now,
+		},
+		"$setOnInsert": bson.M{
+			"created_at": now, // فقط فیلدهای مخصوص insert
+		},
 	}
 
-	_, err := models.WatchesColl().UpdateOne(
-		r.Context(),
-		bson.M{"site_id": siteID, "url_norm": urlNorm},
-		bson.M{
-			"$setOnInsert": doc,
-			"$set": bson.M{
-				"enabled":     doc.Enabled,
-				"freq_min":    doc.FreqMin,
-				"next_run_at": doc.NextRunAt,
-				"updated_at":  now,
-			},
-		},
-		options.Update().SetUpsert(true),
-	)
+	_, err := models.WatchesColl().UpdateOne(r.Context(), filter, update, options.Update().SetUpsert(true))
 	if err != nil {
 		srvError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, bson.M{"ok": true, "site_id": siteID, "url_norm": urlNorm})
+
+	writeJSON(w, http.StatusOK, bson.M{
+		"ok":       true,
+		"site_id":  siteID,
+		"url_norm": urlNorm,
+	})
 }
 
 type watchKeyReq struct {
@@ -134,6 +136,7 @@ type watchKeyReq struct {
 func WatchScanNowHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		badRequest(w, "POST only")
+		http.Error(w, "POST only", http.StatusMethodNotAllowed)
 		return
 	}
 	var req watchKeyReq
@@ -204,6 +207,7 @@ func WatchScanNowHandler(w http.ResponseWriter, r *http.Request) {
 func WatchDeleteHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost && r.Method != http.MethodDelete {
 		badRequest(w, "POST/DELETE only")
+		http.Error(w, "POST/DELETE only", http.StatusMethodNotAllowed)
 		return
 	}
 	var req watchKeyReq
