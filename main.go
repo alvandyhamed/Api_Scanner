@@ -37,6 +37,7 @@ func main() {
 	mux.HandleFunc("/api/health", handlers.WithCORS(handlers.HealthHandler))
 
 	mux.HandleFunc("/api/sites", handlers.WithCORS(handlers.SitesListHandler))
+	mux.HandleFunc("/api/sites/delete", handlers.WithCORS(handlers.SiteDeleteHandler))
 
 	mux.HandleFunc("/api/pages", handlers.WithCORS(handlers.PagesListHandler))
 	mux.HandleFunc("/api/pages/by-url", handlers.WithCORS(handlers.PageByURLHandler))

@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import { Search, Globe, Link2, ChevronRight, ChevronDown, AlertTriangle, ShieldAlert, PlugZap, Eye, EyeOff, Timer } from 'lucide-react'
+import { Search, Globe, Link2, ChevronRight, ChevronDown, AlertTriangle, ShieldAlert, PlugZap, Eye, EyeOff, Timer, Trash2 } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import DomainScanner from "../componnets/DomainScanner.jsx";
 
@@ -87,6 +87,7 @@ export default function Home(){
     const [alerts,setAlerts]=useState({sinks:[],assets:[],loading:false})
     // watches: { [siteId]: { loading, items, mapByUrlNorm } }
     const [watchesBySite, setWatchesBySite] = useState({})
+    const [deletingSite, setDeletingSite] = useState(null)
 
     const nav=useNavigate();
     const {sitesSeen,markSite}=useSeen()
@@ -226,6 +227,61 @@ export default function Home(){
 
     }
 
+    // اضافه کردن function برای حذف دامنه
+    const deleteSite = async (siteId) => {
+        if (!confirm(`آیا مطمئن هستید که می‌خواهید دامنه "${siteId}" و تمام داده‌های مربوط به آن را حذف کنید؟`)) {
+            return
+        }
+        
+        setDeletingSite(siteId)
+        try {
+            const result = await postJSON('/api/sites/delete', { site_id: siteId })
+            console.log('Site deleted:', result)
+            
+            // حذف از state
+            setSites(prev => ({
+                ...prev,
+                items: prev.items.filter(site => site._id !== siteId)
+            }))
+            
+            // حذف از سایر state ها
+            setPagesBySite(prev => {
+                const newState = { ...prev }
+                delete newState[siteId]
+                return newState
+            })
+            
+            setStatusBySite(prev => {
+                const newState = { ...prev }
+                delete newState[siteId]
+                return newState
+            })
+            
+            setWatchesBySite(prev => {
+                const newState = { ...prev }
+                delete newState[siteId]
+                return newState
+            })
+            
+            setExpanded(prev => {
+                const newState = { ...prev }
+                delete newState[siteId]
+                return newState
+            })
+            
+            // حذف از localStorage
+            const sitesSeen = JSON.parse(localStorage.getItem(LS_SITES) || "{}")
+            delete sitesSeen[siteId]
+            localStorage.setItem(LS_SITES, JSON.stringify(sitesSeen))
+            
+        } catch (error) {
+            console.error('Error deleting site:', error)
+            alert('خطا در حذف دامنه: ' + error.message)
+        } finally {
+            setDeletingSite(null)
+        }
+    }
+
     // ---- filter
     const filteredSites=useMemo(()=>{
         const q=query.trim().toLowerCase();
@@ -304,7 +360,24 @@ export default function Home(){
                                             last {timeAgo(s.last_scan_at)}
                                         </div>
                                     </div>
-                                    <span className="ml-auto"><StatusDot state={stat}/></span>
+                                    <div className="ml-auto flex items-center gap-2">
+                                        <StatusDot state={stat}/>
+                                        <button
+                                            onClick={(e) => {
+                                                e.stopPropagation();
+                                                deleteSite(siteId);
+                                            }}
+                                            disabled={deletingSite === siteId}
+                                            className="p-1.5 rounded-lg text-zinc-400 hover:text-red-500 hover:bg-red-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                                            title="حذف دامنه و تمام داده‌های مربوط به آن"
+                                        >
+                                            {deletingSite === siteId ? (
+                                                <div className="w-4 h-4 border-2 border-red-500 border-t-transparent rounded-full animate-spin"></div>
+                                            ) : (
+                                                <Trash2 className="h-4 w-4" />
+                                            )}
+                                        </button>
+                                    </div>
                                 </button>
 
                                 {open && (
