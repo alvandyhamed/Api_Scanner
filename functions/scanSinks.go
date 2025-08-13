@@ -66,12 +66,20 @@ func ScanSinks(ctx context.Context, pageURL, siteID string) ([]models.SinkDoc, e
     for (const mm of html.matchAll(p.re)) {
       const idx = mm.index || 0;
       const lc = lineColFromIndex(html, idx);
-      results.push({kind:p.kind, source_type:"html", source_url:location.href, line:lc.line, col:lc.col, snippet:snippet(html, idx)});
+      results.push({
+        kind:p.kind, source_type:"html", source_url:location.href,
+        line:lc.line, col:lc.col, snippet:snippet(html, idx)
+      });
     }
   }
 
-  // Scripts
-  const list = Array.from(document.scripts).map(s => ({ src: s.src || null, inline: !s.src, text: s.src ? null : (s.text || "") }));
+  // Scripts  ← این قسمت عوض شد
+  const list = Array.from(document.scripts).map((s, i) => {
+    const abs   = s.src ? new URL(s.src, location.href).href : null;
+    const label = abs || (location.href + '#inline-' + (i+1));
+    return { src: abs, label, text: s.src ? null : (s.text || "") };
+  });
+
   for (const it of list) {
     if (it.src) {
       try {
@@ -80,6 +88,7 @@ func ScanSinks(ctx context.Context, pageURL, siteID string) ([]models.SinkDoc, e
       } catch (e) { it.text = ""; }
     }
   }
+
   for (const it of list) {
     if (!it.text) continue;
     for (const p of patterns) {
@@ -87,7 +96,12 @@ func ScanSinks(ctx context.Context, pageURL, siteID string) ([]models.SinkDoc, e
       for (const mm of it.text.matchAll(re)) {
         const idx = mm.index || 0;
         const lc = lineColFromIndex(it.text, idx);
-        results.push({kind:p.kind, source_type:"script", source_url: it.src || location.href, line:lc.line, col:lc.col, snippet:snippet(it.text, idx)});
+        results.push({
+          kind:p.kind,
+          source_type: it.src ? "script" : "inline",
+          source_url: it.label,   // ✅ همیشه label داریم
+          line:lc.line, col:lc.col, snippet:snippet(it.text, idx)
+        });
       }
     }
   }
@@ -102,6 +116,17 @@ func ScanSinks(ctx context.Context, pageURL, siteID string) ([]models.SinkDoc, e
 	out := make([]models.SinkDoc, 0, len(found))
 	now := time.Now()
 	for _, f := range found {
+		srcURL, srcType := normalizeSourceURL(pageURL, f.SourceURL)
+		if f.SourceType == "" {
+			f.SourceType = srcType
+		}
+		if srcURL != "" {
+			f.SourceURL = srcURL
+		}
+		f.SourceURL = srcURL
+		if f.SourceType == "" {
+			f.SourceType = srcType
+		}
 		out = append(out, models.SinkDoc{
 			SiteID:     siteID,
 			PageURL:    pageURL,

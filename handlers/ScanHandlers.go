@@ -46,6 +46,18 @@ func ScanHandler(w http.ResponseWriter, r *http.Request) {
 		req.JSFetchTimeout = 8
 	}
 
+	// ——— Normalize ها را همین اول بساز تا همه‌جا داشته باشیم
+	u, _ := url.Parse(req.URL)
+	host := strings.ToLower(u.Hostname())
+	siteID, _ := publicsuffix.EffectiveTLDPlusOne(host)
+	if siteID == "" {
+		siteID = host
+	}
+	urlNorm := u.Scheme + "://" + u.Host + u.EscapedPath()
+	if u.RawQuery != "" {
+		urlNorm += "?" + u.RawQuery
+	}
+
 	start := time.Now()
 	resp, err := functions.RunScan(req)
 	if err != nil {
@@ -55,47 +67,51 @@ func ScanHandler(w http.ResponseWriter, r *http.Request) {
 	resp.ProcessedAt = time.Now().Format(time.RFC3339)
 	resp.PageDuration = time.Since(start).String()
 
-	// ذخیره نتایج صفحه/اندپوینت‌ها
+	// ذخیرهٔ نتایج صفحه/اندپوینت‌ها
 	saveCtx, cancelSave := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancelSave()
 	if err := functions.SaveScanResults(saveCtx, req.URL, resp.Resources, resp.UniquePaths, resp.AllScripts); err != nil {
 		log.Printf("[mongo save] url=%s err=%v", req.URL, err)
 	}
 
+	// اسکن سینک‌ها: هم استاتیک هم runtime
 	sinksCtx, cancelSinks := context.WithTimeout(r.Context(), 60*time.Second)
 	defer cancelSinks()
-	sinks, err := functions.ScanSinksRuntime(sinksCtx, req.URL) // ← نسخه‌ی runtime که نوشتیم
-	if err == nil && len(sinks) > 0 {
-		// siteID و urlNorm
-		u, _ := url.Parse(req.URL)
-		host := strings.ToLower(u.Hostname())
-		base, _ := publicsuffix.EffectiveTLDPlusOne(host)
-		if base == "" {
-			base = host
-		}
-		urlNorm := u.Scheme + "://" + u.Host + u.EscapedPath()
-		if u.RawQuery != "" {
-			urlNorm += "?" + u.RawQuery
-		}
 
-		for i := range sinks {
-			if sinks[i].SiteID == "" {
-				sinks[i].SiteID = base
-			}
-			if sinks[i].PageURL == "" {
-				sinks[i].PageURL = urlNorm
-			}
-		}
+	var sinks []models.SinkDoc
 
-		bwRes, bwErr := functions.PersistSinks(sinksCtx, sinks)
-		if bwErr != nil {
+	// 1) اسکن JS/HTML (نسخهٔ موجود خودت: ScanSinks یا ScanSinksGo)
+	if s, err := functions.ScanSinks(sinksCtx, req.URL, siteID); err == nil {
+		sinks = append(sinks, s...)
+	} else {
+		log.Printf("[sinks] static scan error: %v", err)
+	}
+
+	// 2) کالکتور runtime (postMessage و …) — urlNorm و siteID را داریم
+	if rt, err := functions.CollectRuntimeSinks(sinksCtx, urlNorm, siteID); err == nil {
+		sinks = append(sinks, rt...)
+	} else {
+		log.Printf("[sinks] runtime collect error: %v", err)
+	}
+
+	// ست کردن شناسه‌ها اگر خالی باشند
+	for i := range sinks {
+		if sinks[i].SiteID == "" {
+			sinks[i].SiteID = siteID
+		}
+		if sinks[i].PageURL == "" {
+			sinks[i].PageURL = urlNorm
+		}
+	}
+
+	// Persist فقط یک‌بار، بعد از ست شدن SiteID/PageURL
+	if len(sinks) > 0 {
+		if bwRes, bwErr := functions.PersistSinks(sinksCtx, sinks); bwErr != nil {
 			log.Printf("[sinks] persist error: %v", bwErr)
 		} else {
 			log.Printf("[sinks] bulk write matched=%d modified=%d upserted=%d",
 				bwRes.MatchedCount, bwRes.ModifiedCount, bwRes.UpsertedCount)
 		}
-	} else if err != nil {
-		log.Printf("[sinks] scan error: %v", err)
 	}
 
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")

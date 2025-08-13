@@ -58,6 +58,8 @@ func RunScan(req models.ScanRequest) (*models.ScanResponse, error) {
 
 		chromedp.Evaluate(`Object.defineProperty(navigator,'webdriver',{get:()=>undefined})`, nil),
 
+		InstallSourceURLHooks(),
+		InstallRuntimePostMessageHook(),
 		chromedp.Navigate(req.URL),
 		chromedp.WaitReady("body", chromedp.ByQuery),
 		chromedp.Sleep(time.Duration(req.WaitSec)*time.Second),

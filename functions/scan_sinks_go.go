@@ -97,6 +97,12 @@ func ScanSinksGo(html string, scripts map[string]string, pageURL, siteID string)
 	for u, code := range scripts {
 		srcType = "script"
 		srcURL = u
+		if normU, normT := normalizeSourceURL(pageURL, srcURL); normU != "" {
+			srcURL = normU
+			if srcType == "" || srcType == "script" { // فقط اگر لازم بود
+				srcType = normT
+			}
+		}
 		scanOne("innerHTML", srcType, srcURL, code, reInnerHTML, &out, siteID, pageURL)
 		scanOne("dangerouslySetInnerHTML", srcType, srcURL, code, reDangerousSet, &out, siteID, pageURL)
 		scanOne("eval", srcType, srcURL, code, reEval, &out, siteID, pageURL)
